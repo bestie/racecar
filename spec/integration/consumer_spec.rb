@@ -58,26 +58,6 @@ RSpec.describe "running a Racecar consumer", type: :integration do
   context "when the runner starts successfully" do
     let(:input_topic) { generate_input_topic_name }
     let(:output_topic) { generate_output_topic_name }
-    let(:mock_echo_consumer_class) do
-      Class.new(Racecar::Consumer) do
-        class << self
-          attr_accessor :output_topic
-        end
-
-        def process(message)
-          produce(message.value, key: message.key, topic: self.class.output_topic, headers: headers)
-          deliver!
-        end
-
-        private
-
-        def headers
-          {
-            processed_by_pid: Process.pid,
-          }
-        end
-      end
-    end
 
     before do
       create_topic(topic: input_topic, partitions: topic_partitions)
@@ -91,13 +71,6 @@ RSpec.describe "running a Racecar consumer", type: :integration do
     end
 
     context "for a single threaded consumer" do
-      let(:consumer_class) do
-        class EchoConsumer1 < mock_echo_consumer_class
-          self.group_id = "echo-consumer-1"
-        end
-        EchoConsumer1
-      end
-
       let(:input_messages) { [{ payload: "hello", key: "greetings", partition: nil }] }
       let(:topic_partitions) { 1 }
       let(:parallelism) { nil }
@@ -133,12 +106,6 @@ RSpec.describe "running a Racecar consumer", type: :integration do
       context "when partitions exceed parallelism" do
         let(:topic_partitions) { 6 }
         let(:parallelism) { 3 }
-        let(:consumer_class) do
-          class EchoConsumer2 < mock_echo_consumer_class
-            self.group_id = "echo-consumer-2"
-          end
-          EchoConsumer2
-        end
 
         it "assigns partitions to all parallel workers" do
           in_background(cleanup_callback: -> { Process.kill("INT", Process.pid) }) do
@@ -157,13 +124,6 @@ RSpec.describe "running a Racecar consumer", type: :integration do
       end
 
       context "when the parallelism exceeds the number of partitions" do
-        let(:consumer_class) do
-          class EchoConsumer3 < mock_echo_consumer_class
-            self.group_id = "echo-consumer-3"
-          end
-          EchoConsumer3
-        end
-
         let(:topic_partitions) { 3 }
         let(:parallelism) { 5 }
         let(:input_messages) do
@@ -192,6 +152,36 @@ RSpec.describe "running a Racecar consumer", type: :integration do
             .to match_array(input_messages.map { |m| m[:payload] })
           expect(message_count_by_worker.values).to eq([2,2,2])
         end
+      end
+    end
+  end
+
+  let(:consumer_class) do
+    TestConsumer = echo_consumer_class
+  end
+
+  after do
+    Object.send(:remove_const, :TestConsumer) if defined?(TestConsumer)
+  end
+
+  def echo_consumer_class
+    Class.new(Racecar::Consumer) do
+      class << self
+        attr_accessor :output_topic
+      end
+      self.group_id = "test_consumer_#{SecureRandom.hex(4)}"
+
+      def process(message)
+        produce(message.value, key: message.key, topic: self.class.output_topic, headers: headers)
+        deliver!
+      end
+
+      private
+
+      def headers
+        {
+          processed_by_pid: Process.pid,
+        }
       end
     end
   end
