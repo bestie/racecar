@@ -65,8 +65,16 @@ RSpec.describe "running a Racecar consumer", type: :integration do
         end
 
         def process(message)
-          produce message.value, key: message.key, topic: self.class.output_topic
+          produce(message.value, key: message.key, topic: self.class.output_topic, headers: headers)
           deliver!
+        end
+
+        private
+
+        def headers
+          {
+            processed_by_pid: Process.pid,
+          }
         end
       end
     end
@@ -134,19 +142,17 @@ RSpec.describe "running a Racecar consumer", type: :integration do
 
         it "assigns partitions to all parallel workers" do
           in_background(cleanup_callback: -> { Process.kill("INT", Process.pid) }) do
-            wait_for_assignments(
-              group_id: "echo-consumer-2",
-              topic: input_topic,
-              expected_members_count: parallelism
-            )
             wait_for_messages(topic: output_topic, expected_message_count: input_messages.count)
           end
 
           Racecar::Cli.new([consumer_class.name.to_s]).run
 
+          message_count_by_worker = incoming_messages.group_by { |m| m.headers.fetch(:processed_by_pid) }.transform_values(&:count)
+
           expect(incoming_messages.map(&:topic).uniq).to eq([output_topic])
           expect(incoming_messages.map(&:payload))
             .to match_array(input_messages.map { |m| m[:payload] })
+          expect(message_count_by_worker.values).to eq([2,2,2])
         end
       end
 
@@ -173,20 +179,18 @@ RSpec.describe "running a Racecar consumer", type: :integration do
 
         it "assigns all the consumers that it can, up to the total number of partitions" do
           in_background(cleanup_callback: -> { Process.kill("INT", Process.pid) }) do
-            wait_for_assignments(
-              group_id: "echo-consumer-3",
-              topic: input_topic,
-              expected_members_count: topic_partitions
-            )
             wait_for_messages(topic: output_topic, expected_message_count: input_messages.count)
           end
 
           Racecar::Cli.new([consumer_class.name.to_s]).run
 
+          message_count_by_worker = incoming_messages.group_by { |m| m.headers.fetch(:processed_by_pid) }.transform_values(&:count)
+
           expect(incoming_messages.count).to eq(6)
           expect(incoming_messages.map(&:topic).uniq).to eq([output_topic])
           expect(incoming_messages.map(&:payload))
             .to match_array(input_messages.map { |m| m[:payload] })
+          expect(message_count_by_worker.values).to eq([2,2,2])
         end
       end
     end

@@ -81,17 +81,6 @@ module IntegrationHelper
     end
   end
 
-  def wait_for_assignments(group_id:, topic:, expected_members_count:)
-    rebalance_attempt = 1
-
-    until members_count(group_id, topic) == expected_members_count
-      $stderr.puts "Waiting for rebalance..."
-      sleep 2 * rebalance_attempt
-      raise "Did not rebalance in time" if rebalance_attempt > 5
-      rebalance_attempt += 1
-    end
-  end
-
   def generate_input_topic_name
     "#{input_topic_prefix}-#{SecureRandom.hex(8)}"
   end
@@ -125,10 +114,6 @@ module IntegrationHelper
     "output-test-topic"
   end
 
-  def members_count(group_id, topic)
-    consumer_group_partitions_and_member_ids(group_id, topic).uniq { |data| data.fetch(:member_id) }.count
-  end
-
   def in_background(cleanup_callback:, &block)
     Thread.new do
       begin
@@ -137,31 +122,5 @@ module IntegrationHelper
         cleanup_callback.call
       end
     end
-  end
-
-  def consumer_group_partitions_and_member_ids(group_id, topic)
-    message, process = run_kafka_command(
-      "kafka-consumer-groups --bootstrap-server #{kafka_brokers} --describe --group #{group_id}"
-    )
-    unless process.exitstatus.zero?
-      raise "Kafka consumer group inspection exited with status #{process.exitstatus}, message: #{message}"
-    end
-
-    return [] if message.match?(/consumer.+(is rebalancing|does not exist|has no active members)/i)
-
-    message
-      .scan(/^#{group_id}\ +#{topic}\ +(?<partition>\d+)\ +\S+\ +\S+\ +\S+\ +(?<member_id>\S+)\ /)
-      .map { |partition, member_id| { partition: partition, member_id: member_id } }
-      .tap do |partitions|
-        raise("Unexpected command output, please review regexp matcher:\n\n #{message}") if partitions.empty?
-      end
-  end
-
-  def run_kafka_command(command)
-    maybe_sudo = "sudo " if ENV["DOCKER_SUDO"] == "true"
-
-    Open3.capture2e(
-      "#{maybe_sudo}docker exec -t $(#{maybe_sudo}docker ps | grep broker | awk '{print $1}') #{command}"
-    )
   end
 end
