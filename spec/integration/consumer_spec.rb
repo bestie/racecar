@@ -82,8 +82,6 @@ RSpec.describe "running a Racecar consumer", type: :integration do
       publish_messages!(input_topic, input_messages)
     end
 
-    after(:all) { delete_all_test_topics }
-
     context "for a single threaded consumer" do
       let(:consumer_class) do
         class EchoConsumer1 < mock_echo_consumer_class

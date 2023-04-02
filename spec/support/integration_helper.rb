@@ -6,21 +6,46 @@ require "open3"
 module IntegrationHelper
   def self.included(klass)
     klass.instance_eval do
-      after { incoming_messages.clear }
+      before(:all) do
+        @@topic_handles ||= {}
+      end
+
+      after do
+        incoming_messages.clear
+        @rdkafka_consumer && @rdkafka_consumer.close
+        @rdkafka_producer && @rdkafka_producer.close
+
+        @rdkafka_admin && @rdkafka_admin.close
+      end
+
+      after(:all) do
+        delete_test_topics
+      end
     end
   end
 
-  def rdkafka_config
-    @rdkafka_config ||= Rdkafka::Config.new({
+  def rdkafka_consumer
+    @rdkafka_consumer ||= Rdkafka::Config.new({
       "bootstrap.servers": kafka_brokers,
       "client.id":         Racecar.config.client_id,
       "group.id":          "racecar-tests",
       "auto.offset.reset": "beginning"
-    }.merge(Racecar.config.rdkafka_consumer))
+    }.merge(Racecar.config.rdkafka_consumer)).consumer
+  end
+
+  def rdkafka_admin
+    @rdkafka_admin ||= Rdkafka::Config.new({
+      "bootstrap.servers": kafka_brokers,
+    }).admin
+  end
+
+  def rdkafka_producer
+    @rdkafka_producer ||= Rdkafka::Config.new({
+      "bootstrap.servers": kafka_brokers,
+    }).producer
   end
 
   def publish_messages!(topic, messages)
-    rdkafka_producer = rdkafka_config.producer
     messages.map do |m|
       rdkafka_producer.produce(
         topic: topic,
@@ -31,21 +56,16 @@ module IntegrationHelper
     end.each(&:wait)
 
     $stderr.puts "Published messages to topic: #{topic}; messages: #{messages}"
-  ensure
-    rdkafka_producer.close
   end
 
-  def create_topic(topic:, partitions: 1)
+  def create_topic(topic:, partitions: 1, replication_factor: 1)
     $stderr.puts "Creating topic #{topic}"
-    msg, process = run_kafka_command("kafka-topics --bootstrap-server #{kafka_brokers} --create "\
-                                     "--topic #{topic} --partitions #{partitions} --replication-factor 1")
-    return if process.exitstatus.zero?
-
-    raise "Kafka topic creation exited with status #{process.exitstatus}, message: #{msg}"
+    handle = rdkafka_admin.create_topic(topic, partitions, replication_factor)
+    @@topic_handles[topic] = handle
+    handle.wait
   end
 
   def wait_for_messages(topic:, expected_message_count:)
-    rdkafka_consumer = rdkafka_config.consumer
     rdkafka_consumer.subscribe(topic)
 
     attempts = 0
@@ -59,8 +79,6 @@ module IntegrationHelper
         incoming_messages << message
       end
     end
-  ensure
-    rdkafka_consumer.close
   end
 
   def wait_for_assignments(group_id:, topic:, expected_members_count:)
@@ -82,16 +100,11 @@ module IntegrationHelper
     "#{output_topic_prefix}-#{SecureRandom.hex(8)}"
   end
 
-  def delete_all_test_topics
-    message, process = run_kafka_command(
-      "kafka-topics --bootstrap-server #{kafka_brokers} --delete --topic '#{input_topic_prefix}-.*'"
-    )
-    $stderr.puts "Input topics deletion exited with status #{process.exitstatus}, message: #{message}"
-
-    message, process = run_kafka_command(
-      "kafka-topics --bootstrap-server #{kafka_brokers} --delete --topic '#{output_topic_prefix}-.*'"
-    )
-    $stderr.puts "Output topics deletion exited with status #{process.exitstatus}, message: #{message}"
+  def delete_test_topics
+    @@topic_handles.keys.map { |topic_name|
+      $stdout.puts "Deleting topic #{topic_name}"
+      rdkafka_admin.delete_topic(topic_name)
+    }.each(&:wait)
   end
 
   def incoming_messages
