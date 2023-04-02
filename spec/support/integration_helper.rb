@@ -2,6 +2,7 @@
 
 require "securerandom"
 require "open3"
+require "timeout"
 
 module IntegrationHelper
   def self.included(klass)
@@ -16,6 +17,8 @@ module IntegrationHelper
         @rdkafka_producer && @rdkafka_producer.close
 
         @rdkafka_admin && @rdkafka_admin.close
+        wait_for_child_processes
+        reset_signal_handlers
       end
 
       after(:all) do
@@ -122,5 +125,19 @@ module IntegrationHelper
         cleanup_callback.call
       end
     end
+  end
+
+  def reset_signal_handlers
+    ["INT", "TERM", "QUIT"].each do |signal|
+      Signal.trap(signal, "DEFAULT")
+    end
+  end
+
+  def wait_for_child_processes
+    Timeout.timeout(5) do
+      Process.waitall
+    end
+  rescue Timeout::Error
+    warn "Timed out waiting for child processes to exit, may have left zombie processes."
   end
 end

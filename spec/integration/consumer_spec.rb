@@ -76,11 +76,12 @@ RSpec.describe "running a Racecar consumer", type: :integration do
       let(:parallelism) { nil }
 
       it "can consume and publish a message" do
-        in_background(cleanup_callback: -> { Process.kill("INT", Process.pid) }) do
-          wait_for_messages(topic: output_topic, expected_message_count: 1)
+        cli = Racecar::Cli.new([consumer_class.name.to_s])
+        in_background(cleanup_callback: -> { cli.stop }) do
+          wait_for_messages(topic: output_topic, expected_message_count: input_messages.count)
         end
 
-        Racecar::Cli.new([consumer_class.name.to_s]).run
+        cli.run
 
         message = incoming_messages.first
 
@@ -108,11 +109,12 @@ RSpec.describe "running a Racecar consumer", type: :integration do
         let(:parallelism) { 3 }
 
         it "assigns partitions to all parallel workers" do
-          in_background(cleanup_callback: -> { Process.kill("INT", Process.pid) }) do
+          cli = Racecar::Cli.new([consumer_class.name.to_s])
+          in_background(cleanup_callback: -> { cli.stop }) do
             wait_for_messages(topic: output_topic, expected_message_count: input_messages.count)
           end
 
-          Racecar::Cli.new([consumer_class.name.to_s]).run
+          cli.run
 
           message_count_by_worker = incoming_messages.group_by { |m| m.headers.fetch(:processed_by_pid) }.transform_values(&:count)
 
@@ -138,11 +140,12 @@ RSpec.describe "running a Racecar consumer", type: :integration do
         end
 
         it "assigns all the consumers that it can, up to the total number of partitions" do
-          in_background(cleanup_callback: -> { Process.kill("INT", Process.pid) }) do
+          cli = Racecar::Cli.new([consumer_class.name.to_s])
+          in_background(cleanup_callback: -> { cli.stop }) do
             wait_for_messages(topic: output_topic, expected_message_count: input_messages.count)
           end
 
-          Racecar::Cli.new([consumer_class.name.to_s]).run
+          cli.run
 
           message_count_by_worker = incoming_messages.group_by { |m| m.headers.fetch(:processed_by_pid) }.transform_values(&:count)
 
