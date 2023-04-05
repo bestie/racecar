@@ -48,6 +48,33 @@ module IntegrationHelper
     }).producer
   end
 
+  def drip_messages(count, topic, partitions, period)
+    count.times.each do |n|
+      execute_in_time(period) do
+        partitions.times.map do |pn|
+          rdkafka_producer.produce(
+            topic: topic,
+            payload: "message #{count} #{pn}",
+            partition: pn,
+          )
+        end.each(&:wait)
+      end
+    end
+  end
+
+  def execute_in_time(period, &block)
+    start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    block.call
+    finish = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    elapsed = finish - start
+    sleep_time = period - elapsed
+    if sleep_time > 0
+      sleep(sleep_time)
+    else
+      warn "Warning: Execution of #{block} took longer than #{period}s"
+    end
+  end
+
   def publish_messages!(topic, messages)
     messages.map do |m|
       rdkafka_producer.produce(
@@ -58,7 +85,7 @@ module IntegrationHelper
       )
     end.each(&:wait)
 
-    $stderr.puts "Published messages to topic: #{topic}; messages: #{messages}"
+    # $stderr.puts "Published messages to topic: #{topic}; messages: #{messages}"
   end
 
   def create_topic(topic:, partitions: 1, replication_factor: 1)

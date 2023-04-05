@@ -13,6 +13,143 @@ class NoProcessConsumer < Racecar::Consumer
 end
 
 RSpec.describe "running a Racecar consumer", type: :integration do
+
+  context "cooperative-sticky assignment" do
+    before do
+      Racecar.configure do |config|
+        config.consumer = [
+          'statistics.interval.ms=1000',
+          'session.timeout.ms=6000',
+          'heartbeat.interval.ms=1500',
+          'partition.assignment.strategy=cooperative-sticky'
+        ]
+      end
+
+      create_topic(topic: input_topic, partitions: topic_partitions)
+      create_topic(topic: output_topic, partitions: topic_partitions)
+      File.write("tmp/test_consumer.rb", consumer_class_code)
+    end
+
+    # let(:input_messages) { message_count.times.map { |n|
+    #   { payload: "message-#{n}", partition: n % topic_partitions }
+    # } }
+
+    let(:message_count) { topic_partitions * 3 }
+    let(:topic_partitions) { 4 }
+    let(:input_topic) { generate_input_topic_name }
+    let(:output_topic) { generate_output_topic_name }
+    let(:test_run_time) { 30 }
+
+    let(:consumer_class_code) { <<~RUBY }
+      require "time"
+
+      class TestConsumer < Racecar::Consumer
+        Racecar.configure do |config|
+          config.consumer = [
+            'statistics.interval.ms=1000',
+            'session.timeout.ms=6000',
+            'heartbeat.interval.ms=1500',
+            'partition.assignment.strategy=cooperative-sticky'
+          ]
+        end
+        subscribes_to "#{input_topic}"
+
+        def configure(*args, &block)
+          @filename = "tmp/consumer-\#{Process.pid}"
+          super
+        end
+
+        def process(message)
+          puts "\#{Process.pid} message \#{message.partition}/\#{message.offset}"
+
+          message_data = JSON.dump(
+            consumer_pid: Process.pid,
+            created_at: Time.now.iso8601(6),
+            occurred_at: message.create_time.iso8601(6),
+            partition: message.partition,
+            offset: message.offset,
+          )
+
+          File.open(@filename, "a") do |f|
+            f.puts(message_data)
+          end
+        end
+
+        def statistics_callback(stats)
+          # puts "got stats"
+        end
+      end
+    RUBY
+
+    MessageRecord = Struct.new(:consumer_pid, :created_at, :occurred_at, :partition, :offset, keyword_init: true) do
+      def initialize(**args)
+        super
+        self.created_at = Time.parse(created_at)
+        self.occurred_at = Time.parse(occurred_at)
+      end
+    end
+
+    it do
+      @pids = 2.times.map do
+        fork do
+          exec("bundle exec racecar TestConsumer -r tmp/test_consumer.rb")
+        end
+      end
+
+      Signal.trap("INT") do
+        kill_processes
+      end
+
+      drip_thread = Thread.new do
+        drip_messages(test_run_time, input_topic, topic_partitions, 1.0)
+      end
+
+      sleep 5
+
+      Process.kill("TERM", @pids.last)
+
+      @pids << fork do
+        exec("bundle exec racecar TestConsumer -r tmp/test_consumer.rb")
+      end
+
+      Timeout.timeout(30) do
+        sleep 0.5 until read_files.size == test_run_time*topic_partitions
+      end
+
+      by_cosumer = message_records.group_by(&:consumer_pid)
+
+      pp by_cosumer.transform_values(&:count)
+    end
+
+    def message_records
+      @message_records ||= read_files
+        .map { |dz| JSON.parse(dz).transform_keys(&:to_sym) }
+        .map { |h| MessageRecord.new(**h) }
+        .sort_by(&:created_at)
+    end
+
+    def kill_processes
+      @pids.each do |pid|
+        Process.kill("TERM", pid) rescue nil
+      end
+    end
+
+    def read_files
+      file_names.flat_map { |fn| File.readlines(fn) }
+    end
+
+    def file_names
+      @pids.map { |pid| "tmp/consumer-#{pid}" }
+    end
+
+    after  do
+      kill_processes
+      Process.waitall
+
+      @pids.each { |pid| File.unlink("tmp/consumer-#{pid}") }
+    end
+  end
+
   context "when an error occurs trying to start the runner" do
     context "when there are no subscriptions, and no parallelism" do
       before { NoSubsConsumer.parallel_workers = nil }
