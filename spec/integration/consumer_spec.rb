@@ -20,6 +20,7 @@ RSpec.describe "running a Racecar consumer", type: :integration do
     before do
       Racecar.configure do |config|
         config.consumer = [
+          "auto.commit.interval.ms=1000",
           'statistics.interval.ms=1000',
           'session.timeout.ms=6000',
           'heartbeat.interval.ms=1500',
@@ -65,6 +66,7 @@ RSpec.describe "running a Racecar consumer", type: :integration do
           ]
         end
         subscribes_to "#{input_topic}"
+        self.group_id = "stickies"
 
         def configure(*args, &block)
           @filename = "tmp/consumer-\#{Process.pid}"
@@ -88,7 +90,9 @@ RSpec.describe "running a Racecar consumer", type: :integration do
         end
 
         def statistics_callback(stats)
-          # puts "got stats"
+          # TODO: use this to get the assigned partitions and the committed offsets
+          #       would be nice to reveal uncommitted offsets on revokation
+          p stats
         end
       end
     RUBY
