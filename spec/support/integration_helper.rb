@@ -49,17 +49,20 @@ module IntegrationHelper
   end
 
   def drip_messages(count, topic, partitions, period)
+    counter = 0
     count.times.each do |n|
       execute_in_time(period) do
         partitions.times.map do |pn|
           rdkafka_producer.produce(
             topic: topic,
-            payload: "message #{count} #{pn}",
+            payload: "message #{count} #{pn} / #{counter}",
             partition: pn,
           )
         end.each(&:wait)
+        counter += 1
       end
     end
+    debug "Done dripping messages 💧💧💧 x #{counter}"
   end
 
   def execute_in_time(period, &block)

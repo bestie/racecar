@@ -79,3 +79,17 @@ module Racecar
     end
   end
 end
+
+module GlobalTestHelpers
+  def debug(thing, io = $stdout)
+    return unless ENV["DEBUG"]
+    # pink on yellow 🤩
+    if thing.is_a?(Enumerable)
+      thing.each { |tt| debug(tt) }
+    else
+      io.puts "\e[1;95;103m#{thing}\e[0m"
+    end
+  end
+end
+
+Object.prepend(GlobalTestHelpers)

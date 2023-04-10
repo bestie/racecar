@@ -49,6 +49,7 @@ module Racecar
 
     def store_offset(message)
       current.store_offset(message)
+      # @logger.info "Stored offset #{message.partition} #{message.offset}"
     rescue Rdkafka::RdkafkaError => e
       if e.code == :state # -172
         @logger.warn "Attempted to store_offset, but we're not subscribed to it: #{ErroneousStateError.new(e)}"
