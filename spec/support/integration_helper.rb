@@ -48,6 +48,10 @@ module IntegrationHelper
     }).producer
   end
 
+  def warm_up(topic:, partitions:, messages_per_partition:)
+    drip_messages(messages_per_partition, topic, partitions, _period=0)
+  end
+
   def drip_messages(count, topic, partitions, period)
     counter = 0
     count.times.each do |n|
@@ -68,6 +72,8 @@ module IntegrationHelper
   def execute_in_time(period, &block)
     start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     block.call
+    return if period == 0
+
     finish = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     elapsed = finish - start
     sleep_time = period - elapsed

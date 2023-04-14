@@ -9,3 +9,4 @@ gemspec
 # on Ruby 2.6, which activesupport 7.0 does not support.
 gem 'activesupport', '~> 6.1.0'
 gem 'awesome_print'
+gem 'pry-byebug'

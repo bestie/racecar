@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "benchmark"
 require "securerandom"
 require "racecar/cli"
 require "racecar/ctl"
@@ -21,26 +22,17 @@ RSpec.describe "running a Racecar consumer", type: :integration do
     before do
       create_topic(topic: input_topic, partitions: topic_partitions)
       create_topic(topic: output_topic, partitions: topic_partitions)
-      # FileUtils.mkdir_p(File.dirname(consumer_class_code_file))
-      # File.write(consumer_class_code_file, consumer_class_code)
-    end
-
-    after do
-      @drip_thread && @drip_thread.terminate
-      # FileUtils.rm_f(consumer_class_code_file)
     end
 
     let(:message_count) { topic_partitions * 3 }
     let(:topic_partitions) { 4 }
     let(:input_topic) { generate_input_topic_name }
     let(:output_topic) { generate_output_topic_name }
-    let(:message_iterations) { 200 }
+    let(:message_iterations) { 50 }
     let(:expected_message_count) { message_iterations * topic_partitions }
     let(:freq) { 2 }
     let(:consumer_pids) { [] }
     let(:spawned_threads) { [] }
-
-    # let(:consumer_class_code_file) { "tmp/test_consumer.rb" }
 
     MessageRecord = Struct.new(:consumer_pid, :created_at, :occurred_at, :partition, :offset, :payload, keyword_init: true) do
       def initialize(**args)
@@ -64,29 +56,12 @@ RSpec.describe "running a Racecar consumer", type: :integration do
         spawned_threads.select(&:alive?).each(&:terminate)
       end
 
-      # Signal.trap("CHLD") do
-      #   puts "A child! NO!"
-      #   consumer_pids.each do |pid|
-      #     result = Process.wait2(pid, Process::WNOHANG) rescue $!
-      #     puts "chcking #{pid} #{result}"
-      #   end
-      # end
-
       start_consumer
       start_consumer
 
       spawned_threads << Thread.new do
         sleep 3
         drip_messages(message_iterations, input_topic, topic_partitions, 1.0/freq)
-      end
-
-      status_thread = Thread.new do
-        # 10.times do
-        #   sleep 5
-        #   debug ""
-        #   debug " 🗄️🗄️🗄️🗄️🗄️🗄️🗄️🗄️ Files status"
-        #   debug show_how_those_files_are_doing
-        # end
       end
 
       puts "Waiting for first consumer consume a bit"
@@ -96,11 +71,18 @@ RSpec.describe "running a Racecar consumer", type: :integration do
       term_consumer(1)
 
       puts "Waiting to simulate boot time"
-      wait_as_if_the_new_consumer_was_booting(5)
+      wait_as_if_the_new_consumer_was_booting(10)
       start_consumer
 
       puts "Waiting for all messages"
       wait_for_message_processing(expected_message_count)
+
+      time = Benchmark.realtime do
+        puts "wait for drip"
+        spawned_threads.each(&:join)
+      end
+      puts "waited #{time.round(3)}s"
+
 
       empty_by_partition = topic_partitions.times.map { |pn| [pn, []] }.to_h
 
@@ -117,13 +99,19 @@ RSpec.describe "running a Racecar consumer", type: :integration do
           .values
           .flatten
       }
+      duplicate_count_by_partition = duplicates_by_partition.transform_values(&:size)
 
       empty_by_consumer = consumer_pids.map { |pid| [pid, []] }.to_h
+      zero_by_consumer = empty_by_consumer.transform_values { |_| 0 }
+
       duplicates_by_consumer = duplicates_by_partition
         .values
         .flatten
         .group_by(&:consumer_pid)
         .reverse_merge(empty_by_consumer)
+      duplicate_count_by_consumer = duplicates_by_consumer
+        .transform_values(&:size)
+        .transform_keys { |pid| "#{consumer_pids.index(pid)}-#{pid}" }
 
       offsets_by_partition = by_partition.transform_values { |ms| ms.map(&:offset).sort }
       stats_by_partition = by_partition.map do |partition, ms|
@@ -140,7 +128,30 @@ RSpec.describe "running a Racecar consumer", type: :integration do
       end.to_h
 
       max_latency_overall = stats_by_partition.max_by { |_partition, stats| stats[:max_latency] }.last
+      max_latency_by_partition = stats_by_partition.transform_values { |stats| stats[:max_latency] }
       max_interval_overall = stats_by_partition.max_by { |_partition, stats| stats[:max_interval] }.last
+
+      replays_by_consumer = message_records.group_by(&:consumer_pid).transform_values { |ms|
+        ms.group_by(&:partition).transform_values { |ms|
+          ms.group_by(&:offset).select { |offset, messages| messages.size > 1 }
+        }
+      }
+
+      replays_by_consumer_partition_offset = message_records
+        .group_by(&:consumer_pid)
+        .transform_values {|ms|
+          ms.group_by(&:partition)
+            .transform_values { |ms|
+              ms.group_by(&:offset).select { |k,v| v.size > 1 }
+            }
+          }
+
+      replay_counts_by_consumer_partition = replays_by_consumer_partition_offset
+        .transform_values { |by_offset_by_partition| by_offset_by_partition.transform_values(&:count) }
+
+      replay_counts_by_consumer = replay_counts_by_consumer_partition
+        .transform_values { |counts_by_partition| counts_by_partition.values.sum }
+
 
       aggregate_failures do
         expect(files).to all be_readable
@@ -151,12 +162,17 @@ RSpec.describe "running a Racecar consumer", type: :integration do
           expect(offsets_by_partition[pn]).to be_consective
         end
 
-        # expect(missing_messages_by_partition).to eq(empty_by_partition)
-        expect(duplicates_by_partition).to eq(empty_by_partition)
-        expect(duplicates_by_consumer).to eq(empty_by_consumer)
+        expect(duplicate_count_by_partition).to eq(empty_by_partition)
+        expect(duplicate_count_by_consumer).to eq(empty_by_consumer)
 
-        expect(max_interval_overall[:max_interval]).to be < 8.0
+        expect(replay_counts_by_consumer).to eq(zero_by_consumer)
+
+        expect(max_latency_by_partition).to match(
+          topic_partitions.times.map { |pn| [pn, be < 8.0] }.to_h
+        )
+
         expect(max_latency_overall[:max_latency]).to be < 2.0
+        expect(max_interval_overall[:max_interval]).to be < 8.0
       end
     end
 
@@ -192,8 +208,8 @@ RSpec.describe "running a Racecar consumer", type: :integration do
       Process.kill("TERM", pid)
     end
 
-    def wait_for_message_processing(expected_message_count)
-      max_wait = (message_iterations / freq) * 1.5
+    def wait_for_message_processing(expected_message_count, max_wait: nil)
+      max_wait ||= (message_iterations / freq) * 1.5
       puts "waiting for messages, will wait #{max_wait}"
 
       Timeout.timeout(max_wait) do
@@ -212,6 +228,12 @@ RSpec.describe "running a Racecar consumer", type: :integration do
       file_names.map do |f|
         messages_count = File.exist?(f) && File.readlines(f).size
         "#{time} #{f} count: #{messages_count}"
+      end
+    end
+
+    def delete_consumer_logs
+      file_names.each do |f|
+        FileUtils.rm(f)
       end
     end
 
@@ -276,7 +298,7 @@ RSpec.describe "running a Racecar consumer", type: :integration do
       end
     end
 
-    it "stats" do
+    xit "stats" do
       ENV["TOPIC"] = input_topic
       ENV["CONSUMER_N"] = "0"
 

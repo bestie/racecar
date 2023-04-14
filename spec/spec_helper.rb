@@ -11,4 +11,5 @@ RSpec.configure do |config|
   config.disable_monkey_patching!
   config.include MockEnv
   config.include IntegrationHelper, type: :integration
+  config.filter_run_when_matching :focus
 end

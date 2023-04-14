@@ -90,6 +90,14 @@ module GlobalTestHelpers
       io.puts "\e[1;95;103m#{thing}\e[0m"
     end
   end
+
+  def puts_yellow(thing, io = $stdout)
+    io.puts "\e[38;5;190m#{thing}\e[0m"
+  end
+
+  def puts_red(thing, io = $stdout)
+    io.puts "\e[1;31m#{thing}\e[0m"
+  end
 end
 
 Object.prepend(GlobalTestHelpers)

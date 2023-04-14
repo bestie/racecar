@@ -3,7 +3,10 @@
 
 require "time"
 require "timeout"
+require "benchmark"
 require "active_support/core_ext/hash"
+
+Thread.abort_on_exception = true
 
 module Racecar
   class ConsumerStats
@@ -14,18 +17,18 @@ module Racecar
 end
 
 class TestConsumer < Racecar::Consumer
-  # include UsefulInfo
-  # include StatsThings
+  prepend UsefulInfo
+  # prepend StatsThings
 
   Racecar.configure do |config|
-    config.offset_commit_interval = 3.0
+    config.offset_commit_interval = 1
     config.consumer = [
       'statistics.interval.ms=1000',
       'session.timeout.ms=6000',
       'heartbeat.interval.ms=1500',
-      # 'partition.assignment.strategy=cooperative-sticky',
-      # "debug=cgrp,topic,fetch",
-      "debug=all",
+      'partition.assignment.strategy=cooperative-sticky',
+      "debug=cgrp,topic,fetch",
+      # "debug=all",
     ]
   end
   subscribes_to ENV.fetch("TOPIC"), start_from_beginning: false
@@ -37,6 +40,18 @@ class TestConsumer < Racecar::Consumer
 
     @stats = []
     register_at_exit_hook
+    @offsets_by_partition = Hash.new { |h,k| h[k] = MinMax.new }
+    @starting_offset_by_partition = {}
+    @assignments = nil
+    @reporter_thread = Thread.new do
+      loop do
+        sleep 2
+        if @assignments != current_assignments
+          puts_yellow "New assignments: #{current_assignments}"
+          @assignments = current_assignments
+        end
+      end
+    end
 
     super
   end
@@ -44,7 +59,6 @@ class TestConsumer < Racecar::Consumer
   def process(message)
     # puts "#{Process.pid} message #{message.partition}/#{message.offset}"
 
-    # require "pry"; binding.pry # DEBUG @bestie
     message_data = JSON.dump(
       consumer_pid: Process.pid,
       created_at: Time.now.iso8601(6),
@@ -58,10 +72,26 @@ class TestConsumer < Racecar::Consumer
       f.puts(message_data)
     end
 
+
+    current_offset = @offsets_by_partition[message.partition].max
+
+    committed_offset = committed_offsets&.dig(0, message.topic, message.partition)
+    if committed_offset && message.offset < committed_offset
+      puts_red "Replay on already committed offset p#{message.partition} #{committed_offset} => #{message.offset}  (processed up to #{current_offset}"
+    end
+
+    # if message.offset < current_offset
+    #   puts_red "Got a rewind! p#{message.partition} #{current_offset} => #{message.offset}"
+    # end
+
+    @offsets_by_partition[message.partition] << message.offset
     @message_count_by_partition[message.partition] += 1
+    # @starting_offset_by_partition[message.partition] ||= message.offset
+
   rescue Object => e
-    debug "Failed to process message #{message}"
-    puts e.full_messages
+    debug "Failed to process message #{message.inspect}"
+    puts e.full_message
+    puts e.backtrace
   ensure
   end
 
@@ -73,11 +103,27 @@ class TestConsumer < Racecar::Consumer
     super "[#{Process.pid}] (#{ENV["CONSUMER_N"]}) #{string}"
   end
 
+  def puts_yellow(string)
+    super "[#{Process.pid}] (#{ENV["CONSUMER_N"]}) #{string}"
+  end
+
+  def puts_red(string)
+    super "[#{Process.pid}] (#{ENV["CONSUMER_N"]}) #{string}"
+  end
+
   def register_at_exit_hook
     at_exit do
       total = @message_count_by_partition.values.sum
-      puts " processed messages (#{total}) #{@message_count_by_partition}"
+      puts_yellow "  processed messages (#{total}) #{@message_count_by_partition}\n" \
+        "min/max offsets #{@offsets_by_partition}"
+      puts_yellow "  committed offsets #{@committed_offsets}"
+      # puts_yellow "  starting offsets #{@starting_offset_by_partition}"
     end
+  end
+
+  def teardown
+    @reporter_thread.terminate if @reporter_thread.alive?
+    @committed_offsets = committed_offsets
   end
 end
 
@@ -88,16 +134,22 @@ module UsefulInfo
   end
 
   def committed_offsets
+    extremely_generous_timeout = 20 # 5ms would probably be generous
     rdk_consumers.map { |rdkc|
       rdkc
-        .committed(_list=nil, _timeout=1200)
+        .committed(_list=nil, extremely_generous_timeout)
         .to_h
         .transform_values { |ps|
           ps.map { |part| [part.partition, part.offset] }.to_h
         }
     }
+  rescue Rdkafka::RdkafkaError => e
+    # puts "Timed out getting committed_offsets"
   end
 
+  def current_assignments
+    rdk_consumers.first.assignment.to_h
+  end
 
   def all_partition_lists_by_topic
     merge_partition_lists_hashes(current_partition_list_topic_hashes)
@@ -198,6 +250,8 @@ module StatsThings
   end
 
   def teardown
+    super
+
     penultimate_stats_count = @stats.count
     debug "~~~~~~ teardown start 🏁 stats count = " + penultimate_stats_count.to_s
     # sleep 1
@@ -216,4 +270,36 @@ module StatsThings
     super
   end
 end
+
+class MinMax
+  def initialize
+    @min = Float::INFINITY
+    @max = 0
+  end
+
+  attr_reader :min, :max
+
+  def <<(new_value)
+    if new_value > @max
+      @max = new_value
+    end
+    if new_value < @min
+      @min = new_value
+    end
+    new_value
+  end
+
+  def to_s
+    to_a.to_s
+  end
+
+  def to_a
+    [@min, @max]
+  end
+
+  def to_h
+    { min: @min, max: @max }
+  end
+end
 }
+
