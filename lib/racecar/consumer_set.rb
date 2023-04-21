@@ -71,7 +71,7 @@ module Racecar
     def current
       @consumers[@consumer_id_iterator.peek] ||= begin
         config = Rdkafka::Config.new(rdkafka_config(current_subscription))
-        config.consumer_rebalance_listener = TestConsumer::Listener.new([])
+        config.consumer_rebalance_listener = Listener.new # must be set, true and Object.new are fine, nil and false are not.
         consumer = config.consumer
 
         @instrumenter.instrument('join_group') do
@@ -244,6 +244,27 @@ module Racecar
     def remaining_time_ms(limit_ms, started_at_time)
       r = limit_ms - ((Time.now - started_at_time)*1000).round
       r <= 0 ? 0 : r
+    end
+
+    class Listener
+      def initialize(queue = Queue.new)
+        @queue = queue
+      end
+
+      def on_partitions_assigned(consumer, list)
+        collect(:assign, list)
+        nil
+      end
+
+      def on_partitions_revoked(consumer, list)
+        collect(:revoke, list)
+        nil
+      end
+
+      def collect(name, list)
+        partitions = list.to_h.map { |key, values| [key, values.map(&:partition)] }.flatten
+        @queue << ([name] + partitions)
+      end
     end
   end
 end

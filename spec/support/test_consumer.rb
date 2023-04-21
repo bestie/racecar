@@ -20,22 +20,6 @@ class TestConsumer < Racecar::Consumer
   prepend UsefulInfo
   # prepend StatsThings
 
-
-  Listener = Struct.new(:queue) do
-    def on_partitions_assigned(consumer, list)
-      collect(:assign, list)
-    end
-
-    def on_partitions_revoked(consumer, list)
-      collect(:revoke, list)
-    end
-
-    def collect(name, list)
-      partitions = list.to_h.map { |key, values| [key, values.map(&:partition)] }.flatten
-      queue << ([name] + partitions)
-    end
-  end
-
   Racecar.configure do |config|
     config.offset_commit_interval = 1
     config.consumer = [
