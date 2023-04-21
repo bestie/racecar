@@ -74,6 +74,9 @@ RSpec.describe "running a Racecar consumer", type: :integration do
       wait_as_if_the_new_consumer_was_booting(10)
       start_consumer
 
+      puts "Wait for producer"
+      spawned_threads.first.join
+
       puts "Waiting for all messages"
       wait_for_message_processing(expected_message_count)
 
@@ -85,6 +88,9 @@ RSpec.describe "running a Racecar consumer", type: :integration do
 
 
       empty_by_partition = topic_partitions.times.map { |pn| [pn, []] }.to_h
+      zero_by_partition = topic_partitions.times.map { |pn| [pn, 0] }.to_h
+      empty_by_consumer = consumer_pids.map { |pid| [pid, []] }.to_h
+      zero_by_consumer = empty_by_consumer.transform_values { |_| 0 }
 
       by_partition = message_records.group_by(&:partition).reverse_merge(empty_by_partition)
       uniq_by_partition = by_partition.transform_values { |ms| ms.uniq(&:offset) }
@@ -101,17 +107,14 @@ RSpec.describe "running a Racecar consumer", type: :integration do
       }
       duplicate_count_by_partition = duplicates_by_partition.transform_values(&:size)
 
-      empty_by_consumer = consumer_pids.map { |pid| [pid, []] }.to_h
-      zero_by_consumer = empty_by_consumer.transform_values { |_| 0 }
-
       duplicates_by_consumer = duplicates_by_partition
         .values
         .flatten
         .group_by(&:consumer_pid)
         .reverse_merge(empty_by_consumer)
+
       duplicate_count_by_consumer = duplicates_by_consumer
         .transform_values(&:size)
-        .transform_keys { |pid| "#{consumer_pids.index(pid)}-#{pid}" }
 
       offsets_by_partition = by_partition.transform_values { |ms| ms.map(&:offset).sort }
       stats_by_partition = by_partition.map do |partition, ms|
@@ -152,7 +155,6 @@ RSpec.describe "running a Racecar consumer", type: :integration do
       replay_counts_by_consumer = replay_counts_by_consumer_partition
         .transform_values { |counts_by_partition| counts_by_partition.values.sum }
 
-
       aggregate_failures do
         expect(files).to all be_readable
 
@@ -162,17 +164,17 @@ RSpec.describe "running a Racecar consumer", type: :integration do
           expect(offsets_by_partition[pn]).to be_consective
         end
 
-        expect(duplicate_count_by_partition).to eq(empty_by_partition)
-        expect(duplicate_count_by_consumer).to eq(empty_by_consumer)
+        expect(duplicate_count_by_partition).to eq(zero_by_partition)
+        expect(duplicate_count_by_consumer).to eq(zero_by_consumer)
 
         expect(replay_counts_by_consumer).to eq(zero_by_consumer)
 
         expect(max_latency_by_partition).to match(
-          topic_partitions.times.map { |pn| [pn, be < 8.0] }.to_h
+          topic_partitions.times.map { |pn| [pn, be < 4.0] }.to_h
         )
 
-        expect(max_latency_overall[:max_latency]).to be < 2.0
-        expect(max_interval_overall[:max_interval]).to be < 8.0
+        expect(max_latency_overall[:max_latency]).to be < 4.0
+        expect(max_interval_overall[:max_interval]).to be < 3.0
       end
     end
 
@@ -213,7 +215,8 @@ RSpec.describe "running a Racecar consumer", type: :integration do
       puts "waiting for messages, will wait #{max_wait}"
 
       Timeout.timeout(max_wait) do
-        until readlines.size >= expected_message_count
+        until (line_count = readlines.size) >= expected_message_count
+          puts "message count = #{line_count}"
           sleep(2/freq)
         end
       end
@@ -267,25 +270,6 @@ RSpec.describe "running a Racecar consumer", type: :integration do
     RSpec::Matchers.define :be_consective do
       match do |sequence|
         sequence.each_cons(2).all? { |a,b| a.succ == b }
-      end
-    end
-    RSpec::Matchers.define :be_empty_for_all_partitions do
-      match do |actual_by_partition|
-        actual_by_partition == empty_by_partition
-      end
-
-      def empty_by_partition
-        topic_partitions.times.map { |n| [n, []] }.to_h
-      end
-    end
-
-    RSpec::Matchers.define :be_empty_for_all_consumers do
-      match do |actual_by_partition|
-        actual_by_partition == empty_by_consumer
-      end
-
-      def empty_by_partition
-        consumer_pids.map { |pid| [pid, []] }.to_h
       end
     end
 

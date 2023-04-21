@@ -70,7 +70,10 @@ module Racecar
 
     def current
       @consumers[@consumer_id_iterator.peek] ||= begin
-        consumer = Rdkafka::Config.new(rdkafka_config(current_subscription)).consumer
+        config = Rdkafka::Config.new(rdkafka_config(current_subscription))
+        config.consumer_rebalance_listener = TestConsumer::Listener.new([])
+        consumer = config.consumer
+
         @instrumenter.instrument('join_group') do
           consumer.subscribe current_subscription.topic
         end
