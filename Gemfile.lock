@@ -3,7 +3,7 @@ PATH
   specs:
     racecar (2.9.0.beta1)
       king_konf (~> 1.0.0)
-      rdkafka (= 0.13.0.beta.3)
+      rdkafka (~> 0.12.0)
 
 GEM
   remote: https://rubygems.org/
@@ -34,7 +34,7 @@ GEM
       byebug (~> 11.0)
       pry (>= 0.13, < 0.15)
     rake (13.0.6)
-    rdkafka (0.13.0.beta.3)
+    rdkafka (0.12.0)
       ffi (~> 1.15)
       mini_portile2 (~> 2.6)
       rake (> 12)
@@ -57,7 +57,6 @@ GEM
     zeitwerk (2.6.7)
 
 PLATFORMS
-  ruby
   x86_64-darwin-22
 
 DEPENDENCIES
