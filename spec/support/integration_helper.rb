@@ -48,10 +48,6 @@ module IntegrationHelper
     }).producer
   end
 
-  def warm_up(topic:, partitions:, messages_per_partition:)
-    drip_messages(messages_per_partition, topic, partitions, _period=0)
-  end
-
   def drip_messages(count, topic, partitions, period)
     counter = 0
     count.times.each do |n|

@@ -5,15 +5,12 @@ module Rdkafka::Bindings
     case code
     when RD_KAFKA_RESP_ERR__ASSIGN_PARTITIONS
       if Rdkafka::Bindings.rd_kafka_rebalance_protocol(client_ptr) == "COOPERATIVE"
-        puts "&&&&&&&&&&&&&&&&&&&& incremental_assign"
         Rdkafka::Bindings.rd_kafka_incremental_assign(client_ptr, partitions_ptr)
       else
-        puts "&&&&&&&&&&&&&&&&&&&& assign"
         Rdkafka::Bindings.rd_kafka_assign(client_ptr, partitions_ptr)
       end
     else # RD_KAFKA_RESP_ERR__REVOKE_PARTITIONS or errors
       if Rdkafka::Bindings.rd_kafka_rebalance_protocol(client_ptr) == "COOPERATIVE"
-        puts "&&&&&&&&&&&&&&&&&&&& incremental_unassign"
         Rdkafka::Bindings.rd_kafka_incremental_unassign(client_ptr, partitions_ptr)
       else
         Rdkafka::Bindings.rd_kafka_assign(client_ptr, FFI::Pointer::NULL)

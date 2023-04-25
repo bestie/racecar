@@ -21,13 +21,11 @@ RSpec.describe "running a Racecar consumer", type: :integration do
   context "cooperative-sticky assignment" do
     before do
       create_topic(topic: input_topic, partitions: topic_partitions)
-      create_topic(topic: output_topic, partitions: topic_partitions)
     end
 
     let(:message_count) { topic_partitions * 3 }
     let(:topic_partitions) { 4 }
     let(:input_topic) { generate_input_topic_name }
-    let(:output_topic) { generate_output_topic_name }
     let(:message_iterations) { 50 }
     let(:expected_message_count) { message_iterations * topic_partitions }
     let(:freq) { 2 }
